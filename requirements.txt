@@ -1,0 +1,8 @@
+streamlit
+google-api-python-client
+lxml
+pandas
+requests
+pdfrw
+pymupdf
+# Add other required packages here
