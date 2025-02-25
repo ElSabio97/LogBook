@@ -3,6 +3,6 @@ google-api-python-client
 lxml
 pandas
 requests
+pdfrw
 pymupdf
-matplotlib
-# Add other required packages here
+matplotlib  # Necesario para las gráficas

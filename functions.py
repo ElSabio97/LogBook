@@ -5,12 +5,10 @@ import pandas as pd
 import io
 from googleapiclient.http import MediaFileUpload
 from datetime import timedelta
-import pdfrw
 import fitz
-import csv
-import streamlit as st
+import os
+import json
 
-SERVICE_ACCOUNT_FILE = 'service_account.json'
 SCOPES = ['https://www.googleapis.com/auth/drive']
 COLUMNAS = [
     "Fecha", "Origen", "Salida", "Destino", "Llegada", "Fabricante",
@@ -21,7 +19,15 @@ COLUMNAS = [
 ]
 
 def get_drive_service():
-    credentials = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
+    # Intenta cargar desde variable de entorno primero (para Streamlit)
+    credentials_json = os.getenv("GOOGLE_CREDENTIALS")
+    if credentials_json:
+        credentials_info = json.loads(credentials_json)
+        credentials = Credentials.from_service_account_info(credentials_info, scopes=SCOPES)
+    else:
+        # Fallback para desarrollo local
+        SERVICE_ACCOUNT_FILE = 'service_account.json'
+        credentials = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
     return build('drive', 'v3', credentials=credentials)
 
 def descargar_csv(file_name, folder_id):
