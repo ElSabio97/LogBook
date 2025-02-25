@@ -26,7 +26,7 @@ def get_drive_service():
 
 def descargar_csv(file_name, folder_id):
     service = get_drive_service()
-    query = f"name='{file_name}' and parents='{folder_id}'"
+    query = f"name='{file_name}' and '{folder_id}' in parents"
     results = service.files().list(q=query, fields="files(id, name)").execute()
     items = results.get('files', [])
     if not items:
@@ -64,7 +64,7 @@ def descargar_y_actualizar_csv(original_file, folder_id, new_file):
 
 def update_file_in_drive_by_name(file_name, folder_id, file_path):
     service = get_drive_service()
-    query = f"name='{file_name}' and parents='{folder_id}'"
+    query = f"name='{file_name}' and '{folder_id}' in parents"
     results = service.files().list(q=query, fields="files(id, name)").execute()
     items = results.get('files', [])
     if not items:
@@ -185,14 +185,11 @@ def rellenar_y_combinar_pdfs(entry_file, exit_file, data):
                         field_name = widget['field_name']
                         rect = fitz.Rect(x0, y0, x1, y1)
                         
-                        # Inicializar text para cada widget
                         text = ""
                         
-                        # Procesar el número de página
                         if field_name == "Número de página":
-                            text = str((page_num // 2) + 1)  # Número de página (1-based)
+                            text = str((page_num // 2) + 1)
                         
-                        # Procesar datos individuales
                         elif not any(x in field_name for x in ["TIEMPO TOTAL", "TOTAL DE ESTA PÁGINA", "TOTAL DESDE LAS PÁGINAS PREVIAS"]):
                             parts = field_name.split("_")
                             if len(parts) > 1 and parts[-1].isdigit():
@@ -207,7 +204,6 @@ def rellenar_y_combinar_pdfs(entry_file, exit_file, data):
                                                 text = ""
                                             break
                         
-                        # Procesar totales
                         else:
                             col_name = None
                             total_type = None
@@ -242,7 +238,6 @@ def rellenar_y_combinar_pdfs(entry_file, exit_file, data):
                                     if text == "0" or text == "00:00":
                                         text = ""
                         
-                        # Escribir el texto en el PDF
                         max_font_size = get_base_font_size(field_name)
                         if "Nombre del PIC" in field_name or "Tipo" in field_name:
                             font_size = adjust_font_size(text, rect, min(8, max_font_size), font)
@@ -262,7 +257,6 @@ def rellenar_y_combinar_pdfs(entry_file, exit_file, data):
                             y_center = y0 + (rect.height - text_height) / 2 + text_height * 0.8
                             page.insert_text((x_center, y_center), text, fontsize=font_size, fontname="helv", color=[0, 0, 0])
             
-            # Actualizar acumulativos
             for col in sum_columns:
                 if col in df.columns:
                     cumulative_totals[col] += df_totals[col]
@@ -271,4 +265,107 @@ def rellenar_y_combinar_pdfs(entry_file, exit_file, data):
         final_doc.close()
 
     process_pdf_widgets(entry_file, exit_file, dataframes)
-    return exit_file  # Devuelve la ruta del archivo procesado
+    return exit_file
+
+def preprocess_data(df):
+    """Preprocesa el DataFrame para cálculos estadísticos."""
+    df_clean = df.copy()
+
+    # Generalizar B737 a B738
+    df_clean['Fabricante'] = df_clean['Fabricante'].str.replace(r'B737.*', 'B738', regex=True)
+    # Generalizar cualquier "172" a C172
+    df_clean['Fabricante'] = df_clean['Fabricante'].str.replace(r'.*172.*', 'C172', regex=True)
+
+    # Reemplazar '--' por '0' en columnas relevantes
+    columns_to_clean = [
+        "SE", "ME", "Tiempo multipiloto", "Tiempo total de vuelo",
+        "Landings Día", "Landings Noche", "Noche", "IFR", 
+        "Piloto al mando", "Co-piloto", "Doble mando", "Instructor", "Total de sesión"
+    ]
+    for col in columns_to_clean:
+        if col in df_clean.columns:
+            df_clean[col] = df_clean[col].replace('--', '0')
+
+    # Función para convertir cualquier formato de tiempo a minutos
+    def time_to_minutes(time_str):
+        if pd.isna(time_str) or time_str == '0':
+            return 0
+        time_str = str(time_str).strip()
+        try:
+            if ':' in time_str:
+                hours, minutes = map(int, time_str.split(':'))
+                return hours * 60 + minutes
+            elif '.' in time_str:
+                hours, minutes = map(int, time_str.split('.'))
+                return hours * 60 + minutes
+            else:
+                return int(float(time_str) * 60)
+        except (ValueError, TypeError):
+            return 0
+
+    # Aplicar conversión a columnas de tiempo
+    time_columns = [
+        "SE", "ME", "Tiempo multipiloto", "Tiempo total de vuelo",
+        "Noche", "IFR", "Piloto al mando", "Co-piloto", "Doble mando", 
+        "Instructor", "Total de sesión"
+    ]
+    for col in time_columns:
+        if col in df_clean.columns:
+            df_clean[col] = df_clean[col].apply(time_to_minutes)
+
+    # Convertir landings a numérico
+    df_clean["Landings Día"] = pd.to_numeric(df_clean["Landings Día"], errors='coerce').fillna(0)
+    df_clean["Landings Noche"] = pd.to_numeric(df_clean["Landings Noche"], errors='coerce').fillna(0)
+
+    # Asegurar que datetime esté en formato correcto
+    df_clean['datetime'] = pd.to_datetime(df_clean['datetime'], errors='coerce')
+
+    return df_clean
+
+def calculate_statistics(df):
+    """Calcula estadísticas basadas en el DataFrame preprocesado."""
+    df_clean = preprocess_data(df)
+    
+    # Total de horas de vuelo (excluye simulador)
+    total_flight_time = df_clean["Tiempo total de vuelo"].sum() / 60
+    
+    # Total de horas de simulador (separado)
+    total_sim_time = df_clean["Total de sesión"].sum() / 60
+    
+    # Total de landings
+    total_landings = df_clean["Landings Día"].sum() + df_clean["Landings Noche"].sum()
+    
+    # Horas por tipo de avión (incluye simuladores bajo su 'Tipo')
+    hours_by_aircraft = (df_clean.groupby("Fabricante")["Tiempo total de vuelo"]
+                        .sum() / 60).to_dict()
+    # Depuración: Verificar horas de B738
+    b738_hours = df_clean[df_clean["Fabricante"] == "B738"]["Tiempo total de vuelo"].sum() / 60
+    print(f"Debug: Horas calculadas para B738: {b738_hours:.2f} horas")
+    # Agregar horas de simulador bajo 'Tipo'
+    sim_hours = (df_clean.groupby("Tipo")["Total de sesión"]
+                .sum() / 60).to_dict()
+    hours_by_aircraft.update(sim_hours)
+    
+    # Horas como piloto al mando
+    total_pic_time = df_clean["Piloto al mando"].sum() / 60
+    
+    # Horas nocturnas
+    total_night_time = df_clean["Noche"].sum() / 60
+    
+    # Horas IFR
+    total_ifr_time = df_clean["IFR"].sum() / 60
+    
+    # Vuelos por mes/año
+    flights_by_month = (df_clean.groupby(df_clean["datetime"].dt.to_period("M"))
+                       .size().to_dict())
+    
+    return {
+        "Total Flight Hours": total_flight_time,
+        "Total Simulator Hours": total_sim_time,
+        "Total Landings": total_landings,
+        "Hours by Aircraft": hours_by_aircraft,
+        "Total PIC Hours": total_pic_time,
+        "Total Night Hours": total_night_time,
+        "Total IFR Hours": total_ifr_time,
+        "Flights by Month": flights_by_month
+    }
