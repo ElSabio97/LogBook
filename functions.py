@@ -8,6 +8,7 @@ from datetime import timedelta
 import fitz
 import os
 import json
+import streamlit as st
 
 SCOPES = ['https://www.googleapis.com/auth/drive']
 COLUMNAS = [
@@ -19,16 +20,20 @@ COLUMNAS = [
 ]
 
 def get_drive_service():
-    # Intenta cargar desde variable de entorno primero (para Streamlit)
-    credentials_json = os.getenv("GOOGLE_CREDENTIALS")
-    if credentials_json:
+    try:
+        credentials_json = st.secrets["google_drive"]["credentials"]
         credentials_info = json.loads(credentials_json)
         credentials = Credentials.from_service_account_info(credentials_info, scopes=SCOPES)
-    else:
-        # Fallback para desarrollo local
-        SERVICE_ACCOUNT_FILE = 'service_account.json'
-        credentials = Credentials.from_service_account_file(SERVICE_ACCOUNT_FILE, scopes=SCOPES)
-    return build('drive', 'v3', credentials=credentials)
+        return build('drive', 'v3', credentials=credentials)
+    except KeyError as e:
+        st.error("Google Drive credentials not found in secrets. Please set [google_drive] credentials in Streamlit Cloud settings.")
+        raise ValueError("Missing google_drive.credentials in st.secrets") from e
+    except json.JSONDecodeError as e:
+        st.error("Invalid JSON in Google Drive credentials. Check the secrets configuration.")
+        raise ValueError("Failed to parse credentials JSON") from e
+    except Exception as e:
+        st.error(f"Error setting up Google Drive service: {str(e)}")
+        raise
 
 def descargar_csv(file_name, folder_id):
     service = get_drive_service()
