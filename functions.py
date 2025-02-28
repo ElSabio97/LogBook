@@ -25,14 +25,11 @@ def get_drive_service():
         credentials_info = json.loads(credentials_json)
         credentials = Credentials.from_service_account_info(credentials_info, scopes=SCOPES)
         return build('drive', 'v3', credentials=credentials)
-    except KeyError as e:
-        st.error("Google Drive credentials not found in secrets. Please set [google_drive] credentials in Streamlit Cloud settings.")
-        raise ValueError("Missing google_drive.credentials in st.secrets") from e
+    except KeyError:
+        st.error("Google Drive credentials not found.")
+        raise
     except json.JSONDecodeError as e:
-        st.error("Invalid JSON in Google Drive credentials. Check the secrets configuration.")
-        raise ValueError("Failed to parse credentials JSON") from e
-    except Exception as e:
-        st.error(f"Error setting up Google Drive service: {str(e)}")
+        st.error(f"Invalid JSON in credentials: {str(e)}")
         raise
 
 def descargar_csv(file_name, folder_id):
