@@ -82,7 +82,15 @@ def update_file_in_drive_by_name(file_name, folder_id, file_path):
     file = service.files().update(fileId=file_id, media_body=media).execute()
     return file.get('id')
 
-def rellenar_y_combinar_pdfs(entry_file, exit_file, data):    
+def rellenar_y_combinar_pdfs(entry_file, exit_file, data):
+    # Resolve the entry_file path relative to functions.py
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    input_pdf_path = os.path.join(base_dir, entry_file)
+    
+    if not os.path.exists(input_pdf_path):
+        st.error(f"PDF template not found at: {input_pdf_path}")
+        raise FileNotFoundError(f"No such file: {input_pdf_path}")
+    
     df = data
     
     # Drop first row if it contains the str "Fecha"
@@ -272,7 +280,7 @@ def rellenar_y_combinar_pdfs(entry_file, exit_file, data):
         final_doc.ez_save(output_pdf_path, garbage=3, clean=True)
         final_doc.close()
 
-    process_pdf_widgets(entry_file, exit_file, dataframes)
+    process_pdf_widgets(input_pdf_path, exit_file, dataframes)
     return exit_file
 
 def preprocess_data(df):
