@@ -4,7 +4,7 @@ import requests
 import pandas as pd
 import io
 from googleapiclient.http import MediaFileUpload
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone  # Añadimos timezone para UTC
 import fitz
 import os
 import json
@@ -58,6 +58,11 @@ def read_new_file(new_file):
     df_nuevo['datetime_simu'] = pd.to_datetime(df_nuevo['Fecha simu'], format='%d/%m/%y', errors='coerce')
     df_nuevo['datetime_simu'] += pd.to_timedelta(df_nuevo.groupby('Fecha simu').cumcount(), unit='m')
     df_nuevo['datetime'] = df_nuevo['datetime'].combine_first(df_nuevo['datetime_simu'])
+    
+    # Filtrar datos futuros (posteriores al momento actual en UTC)
+    current_utc = datetime.now(timezone.utc)
+    df_nuevo = df_nuevo[df_nuevo['datetime'] <= current_utc]
+    
     return df_nuevo.drop(columns=['datetime_simu'])
 
 def descargar_y_actualizar_csv(original_file, folder_id, new_file):
@@ -97,8 +102,7 @@ def descargar_pdf_template(file_name, folder_id):
     return file_name
 
 def rellenar_y_combinar_pdfs(entry_file, exit_file, data):
-    # Descargar el PDF desde Google Drive
-    folder_id = '1B8gnCmbBaGMBT77ba4ntjpZj_NkJcvuI'  # Usamos el mismo folder_id que en app.py
+    folder_id = '1B8gnCmbBaGMBT77ba4ntjpZj_NkJcvuI'
     input_pdf_path = descargar_pdf_template(entry_file, folder_id)
     
     if not os.path.exists(input_pdf_path):
@@ -107,22 +111,16 @@ def rellenar_y_combinar_pdfs(entry_file, exit_file, data):
     
     df = data
     
-    # Drop first row if it contains the str "Fecha"
     if df.iloc[0, 0] == "Fecha":
         df = df.iloc[1:]
     
-    # Replace any . to : except in column Nombre del PIC and Tipo
     df.loc[:, df.columns.difference(['Nombre del PIC', 'Tipo'])] = df.loc[:, df.columns.difference(['Nombre del PIC', 'Tipo'])].replace(r'\.', ':', regex=True)
-    
-    # Set a regex to replace all str after 'B737' in column 'Fabricante' but change it to 'B738'
     df['Fabricante'] = df['Fabricante'].str.replace(r'B737.*', 'B738', regex=True)
-    
     df.drop(columns=["Remark", "datetime"], inplace=True, errors='ignore')
 
     dataframes = [df.iloc[i:i + 14] for i in range(0, len(df), 14)]
 
     def time_to_minutes(time_str):
-        """Convierte un string en formato HH:MM a minutos. Devuelve 0 si está vacío."""
         if pd.isna(time_str) or not time_str:
             return 0
         try:
@@ -132,7 +130,6 @@ def rellenar_y_combinar_pdfs(entry_file, exit_file, data):
             return 0
 
     def minutes_to_time(minutes):
-        """Convierte minutos a formato HH:MM."""
         hours = minutes // 60
         mins = minutes % 60
         return f"{hours:02d}:{mins:02d}"
@@ -298,15 +295,9 @@ def rellenar_y_combinar_pdfs(entry_file, exit_file, data):
     return exit_file
 
 def preprocess_data(df):
-    """Preprocesa el DataFrame para cálculos estadísticos."""
     df_clean = df.copy()
-
-    # Generalizar B737 a B738
     df_clean['Fabricante'] = df_clean['Fabricante'].str.replace(r'B737.*', 'B738', regex=True)
-    # Generalizar cualquier "172" a C172
     df_clean['Fabricante'] = df_clean['Fabricante'].str.replace(r'.*172.*', 'C172', regex=True)
-
-    # Reemplazar '--' por '0' en columnas relevantes
     columns_to_clean = [
         "SE", "ME", "Tiempo multipiloto", "Tiempo total de vuelo",
         "Landings Día", "Landings Noche", "Noche", "IFR", 
@@ -316,7 +307,6 @@ def preprocess_data(df):
         if col in df_clean.columns:
             df_clean[col] = df_clean[col].replace('--', '0')
 
-    # Función para convertir cualquier formato de tiempo a minutos
     def time_to_minutes(time_str):
         if pd.isna(time_str) or time_str == '0':
             return 0
@@ -333,7 +323,6 @@ def preprocess_data(df):
         except (ValueError, TypeError):
             return 0
 
-    # Aplicar conversión a columnas de tiempo
     time_columns = [
         "SE", "ME", "Tiempo multipiloto", "Tiempo total de vuelo",
         "Noche", "IFR", "Piloto al mando", "Co-piloto", "Doble mando", 
@@ -343,52 +332,25 @@ def preprocess_data(df):
         if col in df_clean.columns:
             df_clean[col] = df_clean[col].apply(time_to_minutes)
 
-    # Convertir landings a numérico
     df_clean["Landings Día"] = pd.to_numeric(df_clean["Landings Día"], errors='coerce').fillna(0)
     df_clean["Landings Noche"] = pd.to_numeric(df_clean["Landings Noche"], errors='coerce').fillna(0)
-
-    # Asegurar que datetime esté en formato correcto
     df_clean['datetime'] = pd.to_datetime(df_clean['datetime'], errors='coerce')
-
     return df_clean
 
 def calculate_statistics(df):
-    """Calcula estadísticas basadas en el DataFrame preprocesado."""
     df_clean = preprocess_data(df)
-    
-    # Total de horas de vuelo (excluye simulador)
     total_flight_time = df_clean["Tiempo total de vuelo"].sum() / 60
-    
-    # Total de horas de simulador (separado)
     total_sim_time = df_clean["Total de sesión"].sum() / 60
-    
-    # Total de landings
     total_landings = df_clean["Landings Día"].sum() + df_clean["Landings Noche"].sum()
-    
-    # Horas por tipo de avión (incluye simuladores bajo su 'Tipo')
-    hours_by_aircraft = (df_clean.groupby("Fabricante")["Tiempo total de vuelo"]
-                        .sum() / 60).to_dict()
-    # Depuración: Verificar horas de B738
+    hours_by_aircraft = (df_clean.groupby("Fabricante")["Tiempo total de vuelo"].sum() / 60).to_dict()
     b738_hours = df_clean[df_clean["Fabricante"] == "B738"]["Tiempo total de vuelo"].sum() / 60
     print(f"Debug: Horas calculadas para B738: {b738_hours:.2f} horas")
-    # Agregar horas de simulador bajo 'Tipo'
-    sim_hours = (df_clean.groupby("Tipo")["Total de sesión"]
-                .sum() / 60).to_dict()
+    sim_hours = (df_clean.groupby("Tipo")["Total de sesión"].sum() / 60).to_dict()
     hours_by_aircraft.update(sim_hours)
-    
-    # Horas como piloto al mando
     total_pic_time = df_clean["Piloto al mando"].sum() / 60
-    
-    # Horas nocturnas
     total_night_time = df_clean["Noche"].sum() / 60
-    
-    # Horas IFR
     total_ifr_time = df_clean["IFR"].sum() / 60
-    
-    # Vuelos por mes/año
-    flights_by_month = (df_clean.groupby(df_clean["datetime"].dt.to_period("M"))
-                       .size().to_dict())
-    
+    flights_by_month = (df_clean.groupby(df_clean["datetime"].dt.to_period("M")).size().to_dict())
     return {
         "Total Flight Hours": total_flight_time,
         "Total Simulator Hours": total_sim_time,
