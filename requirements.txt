@@ -5,4 +5,5 @@ pandas
 requests
 pdfrw
 pymupdf
-matplotlib  # Necesario para las gráficas
+matplotlib  # Puedes dejarlo si lo usas en otro lugar, pero ya no es necesario para estas gráficas
+plotly  # Añadido para las gráficas interactivas
