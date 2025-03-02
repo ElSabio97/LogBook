@@ -82,13 +82,27 @@ def update_file_in_drive_by_name(file_name, folder_id, file_path):
     file = service.files().update(fileId=file_id, media_body=media).execute()
     return file.get('id')
 
+def descargar_pdf_template(file_name, folder_id):
+    service = get_drive_service()
+    query = f"name='{file_name}' and '{folder_id}' in parents"
+    results = service.files().list(q=query, fields="files(id, name)").execute()
+    items = results.get('files', [])
+    if not items:
+        st.error(f"No se encontró {file_name} en Google Drive.")
+        raise FileNotFoundError(f"No se encontró {file_name} en Google Drive.")
+    file_id = items[0]['id']
+    request = service.files().get_media(fileId=file_id)
+    with open(file_name, "wb") as f:
+        f.write(request.execute())
+    return file_name
+
 def rellenar_y_combinar_pdfs(entry_file, exit_file, data):
-    # Resolve the entry_file path relative to functions.py
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    input_pdf_path = os.path.join(base_dir, entry_file)
+    # Descargar el PDF desde Google Drive
+    folder_id = '1B8gnCmbBaGMBT77ba4ntjpZj_NkJcvuI'  # Usamos el mismo folder_id que en app.py
+    input_pdf_path = descargar_pdf_template(entry_file, folder_id)
     
     if not os.path.exists(input_pdf_path):
-        st.error(f"PDF template not found at: {input_pdf_path}")
+        st.error(f"PDF template no encontrado después de descargarlo: {input_pdf_path}")
         raise FileNotFoundError(f"No such file: {input_pdf_path}")
     
     df = data
