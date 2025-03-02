@@ -77,9 +77,18 @@ def read_new_file(new_file):
     # Unir datetime y datetime_simu
     df_nuevo['datetime'] = df_nuevo['datetime'].combine_first(df_nuevo['datetime_simu'])
 
-    # Verificar que datetime tenga zona horaria UTC
-    if df_nuevo['datetime'].dt.tz is None:
+    # Verificar si datetime_simu tiene zona horaria antes de asignarla o convertirla
+    if df_nuevo['datetime_simu'].dtype == 'datetime64[ns]':  
+        df_nuevo['datetime_simu'] = df_nuevo['datetime_simu'].dt.tz_localize('UTC', ambiguous='NaT')
+    else:
+        df_nuevo['datetime_simu'] = df_nuevo['datetime_simu'].dt.tz_convert('UTC')
+    
+    # Verificar si datetime tiene zona horaria antes de asignarla o convertirla
+    if df_nuevo['datetime'].dtype == 'datetime64[ns]':  
         df_nuevo['datetime'] = df_nuevo['datetime'].dt.tz_localize('UTC', ambiguous='NaT')
+    else:
+        df_nuevo['datetime'] = df_nuevo['datetime'].dt.tz_convert('UTC')
+
 
     # Filtrar datos futuros
     current_utc = pd.Timestamp.now(tz='UTC')
