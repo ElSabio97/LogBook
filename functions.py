@@ -4,7 +4,7 @@ import requests
 import pandas as pd
 import io
 from googleapiclient.http import MediaFileUpload
-from datetime import timedelta
+from datetime import timedelta, datetime
 import fitz
 import os
 import json
@@ -399,3 +399,8 @@ def calculate_statistics(df):
         "Total IFR Hours": total_ifr_time,
         "Flights by Month": flights_by_month
     }
+
+def filter_future_dates(df):
+    current_date = datetime.now()
+    df['datetime'] = pd.to_datetime(df['datetime'])
+    return df[df['datetime'] <= current_date]

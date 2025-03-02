@@ -4,7 +4,8 @@ from functions import (descargar_y_actualizar_csv,
                        descargar_csv, 
                        rellenar_y_combinar_pdfs,
                        preprocess_data,
-                       calculate_statistics)
+                       calculate_statistics,
+                       filter_future_dates)
 import plotly.express as px  # Importamos Plotly Express para gráficas interactivas
 import pandas as pd
 
@@ -20,9 +21,14 @@ def main():
         if user_data is None or len(user_data) < 2:
             st.write("El archivo está vacío o no se pudo descargar.")
         else:
-            st.write(user_data)
             user_data.to_csv('Actualizado.csv', index=False, sep=';', encoding='UTF-8')
             local_path = 'Actualizado.csv'
+            
+            # Filter out future dates
+            df = pd.read_csv(local_path, sep=';')
+            df = filter_future_dates(df)
+            df.to_csv(local_path, index=False, sep=';', encoding='UTF-8')
+            
             update_file_in_drive_by_name('LogBook.csv', FOLDER_ID, local_path)
             st.write("Archivo actualizado y subido a Google Drive.")
             
