@@ -48,22 +48,45 @@ def descargar_csv(file_name, folder_id):
     df['datetime'] = pd.to_datetime(df['datetime'], format='%Y-%m-%d %H:%M:%S', errors='coerce')
     return df
 
+import pandas as pd
+
 def read_new_file(new_file):
     renamed_name = new_file.name.replace(".xls", ".html")
     new_file.name = renamed_name
     file_nuevo = pd.read_html(new_file)
+    
     df_nuevo = pd.DataFrame(file_nuevo[0]).iloc[:-2]
     df_nuevo.columns = COLUMNAS
-    df_nuevo['datetime'] = pd.to_datetime(df_nuevo['Fecha'] + ' ' + df_nuevo['Salida'], format='%d/%m/%y %H:%M', errors='coerce')
-    df_nuevo['datetime_simu'] = pd.to_datetime(df_nuevo['Fecha simu'], format='%d/%m/%y', errors='coerce')
-    df_nuevo['datetime_simu'] += pd.to_timedelta(df_nuevo.groupby('Fecha simu').cumcount(), unit='m')
-    df_nuevo['datetime'] = df_nuevo['datetime'].combine_first(df_nuevo['datetime_simu'])
     
-    # Filtrar datos futuros (posteriores al momento actual en UTC)
+    # Convertir fechas y asegurarse de que tengan zona horaria UTC
+    df_nuevo['datetime'] = pd.to_datetime(
+        df_nuevo['Fecha'] + ' ' + df_nuevo['Salida'],
+        format='%d/%m/%y %H:%M', errors='coerce', utc=True
+    )
+    
+    df_nuevo['datetime_simu'] = pd.to_datetime(
+        df_nuevo['Fecha simu'], format='%d/%m/%y', errors='coerce', utc=True
+    )
+
+    # Ajustar datetime_simu para agregar minutos únicos a cada fila por fecha simulada
+    df_nuevo['datetime_simu'] += pd.to_timedelta(df_nuevo.groupby('Fecha simu').cumcount(), unit='m')
+
+    # Asegurar que la columna datetime_simu tenga UTC después de la suma
+    df_nuevo['datetime_simu'] = df_nuevo['datetime_simu'].dt.tz_localize('UTC', ambiguous='NaT')
+
+    # Unir datetime y datetime_simu
+    df_nuevo['datetime'] = df_nuevo['datetime'].combine_first(df_nuevo['datetime_simu'])
+
+    # Verificar que datetime tenga zona horaria UTC
+    if df_nuevo['datetime'].dt.tz is None:
+        df_nuevo['datetime'] = df_nuevo['datetime'].dt.tz_localize('UTC', ambiguous='NaT')
+
+    # Filtrar datos futuros
     current_utc = pd.Timestamp.now(tz='UTC')
     df_nuevo = df_nuevo[df_nuevo['datetime'] <= current_utc]
-    
+
     return df_nuevo.drop(columns=['datetime_simu'])
+
 
 def descargar_y_actualizar_csv(original_file, folder_id, new_file):
     df_original = descargar_csv(original_file, folder_id)
