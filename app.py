@@ -5,7 +5,7 @@ from functions import (descargar_y_actualizar_csv,
                        rellenar_y_combinar_pdfs,
                        preprocess_data,
                        calculate_statistics)
-import matplotlib.pyplot as plt
+import plotly.express as px  # Importamos Plotly Express para gráficas interactivas
 import pandas as pd
 
 FOLDER_ID = '1B8gnCmbBaGMBT77ba4ntjpZj_NkJcvuI'  # Drive folder ID
@@ -37,55 +37,54 @@ def main():
             st.write(f"**Total de Horas de Simulador:** {stats['Total Simulator Hours']:.2f} horas")
             st.write(f"**Total de Landings:** {stats['Total Landings']}")
             
-            # Gráfica de horas por tipo de avión
+            # Gráfica de horas por tipo de avión (interactiva con Plotly)
             st.subheader("Horas por Tipo de Avión")
             aircraft_types = [aircraft for aircraft, hours in stats['Hours by Aircraft'].items() if hours > 0]
             hours = [hours for hours in stats['Hours by Aircraft'].values() if hours > 0]
-            
-            fig, ax = plt.subplots(figsize=(10, 6))
-            ax.bar(aircraft_types, hours, color='lightgreen')
-            ax.set_xlabel('Tipo de Avión')
-            ax.set_ylabel('Horas de Vuelo')
-            ax.set_title('Horas por Tipo de Avión')
-            plt.xticks(rotation=45, ha='right')
-            plt.tight_layout()
-            st.pyplot(fig)
+            fig1 = px.bar(
+                x=aircraft_types, 
+                y=hours, 
+                labels={'x': 'Tipo de Avión', 'y': 'Horas de Vuelo'},
+                title='Horas por Tipo de Avión',
+                color_discrete_sequence=['lightgreen']  # Color similar al original
+            )
+            fig1.update_layout(xaxis_tickangle=-45)  # Rotar etiquetas para mejor legibilidad
+            st.plotly_chart(fig1, use_container_width=True)
             
             st.write(f"**Total de Horas como Piloto al Mando:** {stats['Total PIC Hours']:.2f} horas")
             st.write(f"**Total de Horas Nocturnas:** {stats['Total Night Hours']:.2f} horas")
             st.write(f"**Total de Horas IFR:** {stats['Total IFR Hours']:.2f} horas")
             
-            # Gráfica de vuelos por mes/año
+            # Gráfica de vuelos por mes/año (interactiva con Plotly)
             st.subheader("Vuelos por Mes/Año")
             months = [str(month) for month in stats['Flights by Month'].keys()]
             flight_counts = list(stats['Flights by Month'].values())
+            fig2 = px.bar(
+                x=months, 
+                y=flight_counts, 
+                labels={'x': 'Mes/Año', 'y': 'Número de Vuelos'},
+                title='Vuelos por Mes/Año',
+                color_discrete_sequence=['skyblue']  # Color similar al original
+            )
+            fig2.update_layout(xaxis_tickangle=-45)
+            st.plotly_chart(fig2, use_container_width=True)
             
-            fig, ax = plt.subplots(figsize=(10, 6))
-            ax.bar(months, flight_counts, color='skyblue')
-            ax.set_xlabel('Mes/Año')
-            ax.set_ylabel('Número de Vuelos')
-            ax.set_title('Vuelos por Mes/Año')
-            plt.xticks(rotation=45, ha='right')
-            plt.tight_layout()
-            st.pyplot(fig)
-            
-            # Nueva gráfica de horas por mes/año
+            # Gráfica de horas por mes/año (interactiva con Plotly)
             st.subheader("Horas de Vuelo por Mes/Año")
-            # Calcular las horas por mes desde los datos preprocesados
             df_clean = preprocess_data(user_data)
             hours_by_month = (df_clean.groupby(df_clean["datetime"].dt.to_period("M"))
                              ["Tiempo total de vuelo"].sum() / 60).to_dict()
             months_hours = [str(month) for month in hours_by_month.keys()]
             hours_values = list(hours_by_month.values())
-            
-            fig, ax = plt.subplots(figsize=(10, 6))
-            ax.bar(months_hours, hours_values, color='salmon')
-            ax.set_xlabel('Mes/Año')
-            ax.set_ylabel('Horas de Vuelo')
-            ax.set_title('Horas de Vuelo por Mes/Año')
-            plt.xticks(rotation=45, ha='right')
-            plt.tight_layout()
-            st.pyplot(fig)
+            fig3 = px.bar(
+                x=months_hours, 
+                y=hours_values, 
+                labels={'x': 'Mes/Año', 'y': 'Horas de Vuelo'},
+                title='Horas de Vuelo por Mes/Año',
+                color_discrete_sequence=['salmon']  # Color similar al original
+            )
+            fig3.update_layout(xaxis_tickangle=-45)
+            st.plotly_chart(fig3, use_container_width=True)
             
             # Generar y ofrecer descarga del PDF
             pdf_path = rellenar_y_combinar_pdfs("LogBook_Rellenable.pdf", "LogBook_Rellenado.pdf", user_data)
