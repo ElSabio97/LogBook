@@ -60,7 +60,7 @@ def read_new_file(new_file):
     df_nuevo['datetime'] = df_nuevo['datetime'].combine_first(df_nuevo['datetime_simu'])
     
     # Filtrar datos futuros (posteriores al momento actual en UTC)
-    current_utc = pd.Timestamp(datetime.now(timezone.utc))
+    current_utc = pd.Timestamp.now(tz='UTC')
     df_nuevo = df_nuevo[df_nuevo['datetime'] <= current_utc]
     
     return df_nuevo.drop(columns=['datetime_simu'])
