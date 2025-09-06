@@ -98,8 +98,10 @@ def main():
             takeoffs, landings = airport_operations(user_data)
             # Limitar a top 20 para evitar saturar (configurable)
             top_n = st.slider("Número de aeropuertos a mostrar", 5, 50, 20)
-            takeoffs_top = takeoffs.head(top_n).reset_index().rename(columns={'index': 'Aeropuerto'})
-            landings_top = landings.head(top_n).reset_index().rename(columns={'index': 'Aeropuerto'})
+            takeoffs_top = takeoffs.head(top_n).reset_index()
+            takeoffs_top.columns = ['Aeropuerto', 'Despegues']
+            landings_top = landings.head(top_n).reset_index()
+            landings_top.columns = ['Aeropuerto', 'Aterrizajes']
             fig4 = px.bar(takeoffs_top, x='Aeropuerto', y='Despegues', title='Despegues por Aeropuerto', color='Despegues', color_continuous_scale='Blues')
             fig4.update_layout(xaxis_tickangle=-60)
             st.plotly_chart(fig4, use_container_width=True)
