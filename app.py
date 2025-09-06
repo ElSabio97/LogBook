@@ -5,7 +5,8 @@ from functions import (descargar_y_actualizar_csv,
                        rellenar_y_combinar_pdfs,
                        preprocess_data,
                        calculate_statistics,
-                       filter_future_dates)
+                       filter_future_dates,
+                       airport_operations)  # nueva importación
 import plotly.express as px  # Importamos Plotly Express para gráficas interactivas
 import pandas as pd
 
@@ -91,6 +92,20 @@ def main():
             )
             fig3.update_layout(xaxis_tickangle=-45)
             st.plotly_chart(fig3, use_container_width=True)
+
+            # NUEVAS GRAFICAS: Despegues y Aterrizajes por Aeropuerto
+            st.subheader("Despegues y Aterrizajes por Aeropuerto")
+            takeoffs, landings = airport_operations(user_data)
+            # Limitar a top 20 para evitar saturar (configurable)
+            top_n = st.slider("Número de aeropuertos a mostrar", 5, 50, 20)
+            takeoffs_top = takeoffs.head(top_n).reset_index().rename(columns={'index': 'Aeropuerto'})
+            landings_top = landings.head(top_n).reset_index().rename(columns={'index': 'Aeropuerto'})
+            fig4 = px.bar(takeoffs_top, x='Aeropuerto', y='Despegues', title='Despegues por Aeropuerto', color='Despegues', color_continuous_scale='Blues')
+            fig4.update_layout(xaxis_tickangle=-60)
+            st.plotly_chart(fig4, use_container_width=True)
+            fig5 = px.bar(landings_top, x='Aeropuerto', y='Aterrizajes', title='Aterrizajes por Aeropuerto', color='Aterrizajes', color_continuous_scale='Oranges')
+            fig5.update_layout(xaxis_tickangle=-60)
+            st.plotly_chart(fig5, use_container_width=True)
             
             # Generar y ofrecer descarga del PDF
             pdf_path = rellenar_y_combinar_pdfs("LogBook_Rellenable.pdf", "LogBook_Rellenado.pdf", user_data)
