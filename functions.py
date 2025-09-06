@@ -404,3 +404,26 @@ def filter_future_dates(df):
     current_date = datetime.now()
     df['datetime'] = pd.to_datetime(df['datetime'])
     return df[df['datetime'] <= current_date]
+
+# NUEVA FUNCION: calcular despegues y aterrizajes por aeropuerto
+# Devuelve dos Series ordenadas descendentemente: despegues (por Origen) y aterrizajes (por Destino)
+def airport_operations(df):
+    df_ops = df.copy()
+    # Normalizar
+    for col in ['Origen', 'Destino']:
+        if col in df_ops.columns:
+            df_ops[col] = (df_ops[col].astype(str)
+                                         .str.strip()
+                                         .str.upper()
+                                         .replace({'': pd.NA, 'NAN': pd.NA}))
+    # Filtrar filas vacías
+    df_ops = df_ops.dropna(subset=['Origen', 'Destino'], how='all')
+    takeoffs = (df_ops.dropna(subset=['Origen'])
+                      .groupby('Origen').size()
+                      .sort_values(ascending=False)
+                      .rename('Despegues'))
+    landings = (df_ops.dropna(subset=['Destino'])
+                      .groupby('Destino').size()
+                      .sort_values(ascending=False)
+                      .rename('Aterrizajes'))
+    return takeoffs, landings
