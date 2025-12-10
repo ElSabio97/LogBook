@@ -19,6 +19,130 @@ COLUMNAS = [
     "Fecha simu", "Tipo", "Total de sesión", "Observaciones", "datetime"
 ]
 
+# Rutas y utilidades para normalizar aeropuertos (IATA -> ICAO) y mapas
+BASE_DIR = os.path.dirname(__file__)
+ICAO_IATA_PATH = os.path.join(BASE_DIR, "icaoiata.json")
+AIRPORTS_JSON_PATH = os.path.join(BASE_DIR, "airports.json")
+
+
+def _load_airport_mappings():
+    """Carga el mapeo IATA->ICAO desde icaoiata.json.
+
+    Devuelve:
+        (dict, set):
+            - dict IATA -> ICAO
+            - set de códigos ICAO válidos
+    """
+    try:
+        with open(ICAO_IATA_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        # Si falla la carga (archivo no encontrado, JSON inválido, etc.),
+        # devolvemos estructuras vacías para que el resto del código siga funcionando.
+        return {}, set()
+
+    iata_to_icao = {}
+    icao_codes = set()
+
+    for row in data if isinstance(data, list) else []:
+        if not isinstance(row, dict):
+            continue
+        icao = str(row.get("ICAO", "")).strip().upper()
+        iata = str(row.get("IATA", "")).strip().upper()
+
+        if icao:
+            icao_codes.add(icao)
+        if iata and icao:
+            # En caso de duplicados, el último sobrescribe al anterior
+            iata_to_icao[iata] = icao
+
+    return iata_to_icao, icao_codes
+
+
+IATA_TO_ICAO, ICAO_CODES = _load_airport_mappings()
+# Mapa inverso aproximado para poder pasar de ICAO -> IATA
+ICAO_TO_IATA = {icao: iata for iata, icao in IATA_TO_ICAO.items()}
+
+
+def _load_airports_coordinates():
+    """Carga coordenadas de aeropuertos desde airports.json (IATA -> lat/lon)."""
+    try:
+        with open(AIRPORTS_JSON_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return {}
+
+    coords = {}
+    if isinstance(data, list):
+        for row in data:
+            if not isinstance(row, dict):
+                continue
+            iata = str(row.get("IATA", "")).strip().upper()
+            if not iata:
+                continue
+            try:
+                lat = float(row.get("Latitude"))
+                lon = float(row.get("Longitude"))
+            except (TypeError, ValueError):
+                continue
+            coords[iata] = (lat, lon)
+    return coords
+
+
+AIRPORT_COORDS = _load_airports_coordinates()
+
+
+def normalize_airport_code_to_icao(code):
+    """Normaliza un código de aeropuerto a ICAO usando icaoiata.json.
+
+    - Si ya es un ICAO conocido, se deja tal cual.
+    - Si es un IATA conocido, se convierte a ICAO.
+    - Si no se conoce, se devuelve el código normalizado (upper/strip).
+    - Maneja NaN y cadenas vacías devolviendo "".
+    """
+    if pd.isna(code):
+        return ""
+
+    code = str(code).strip().upper()
+    if not code:
+        return ""
+
+    # Permitir combinaciones separadas por "/" (ej. "MAD/PMI")
+    if "/" in code and len(code) > 4:
+        parts = [normalize_airport_code_to_icao(part) for part in code.split("/")]
+        parts = [p for p in parts if p]
+        return "/".join(parts)
+
+    # Si ya es un ICAO conocido, lo dejamos
+    if code in ICAO_CODES:
+        return code
+
+    # Intentar conversión desde IATA
+    if code in IATA_TO_ICAO:
+        return IATA_TO_ICAO[code]
+
+    # Si parece un ICAO (4 letras) aunque no esté en la lista, lo dejamos
+    if len(code) == 4 and code.isalpha():
+        return code
+
+    # En cualquier otro caso devolvemos el código tal cual
+    return code
+
+
+def normalize_airport_columns_to_icao(df, columns=None):
+    """Devuelve una copia de df con columnas de aeropuertos normalizadas a ICAO.
+
+    Por defecto actúa sobre las columnas "Origen" y "Destino" si existen.
+    """
+    if columns is None:
+        columns = ["Origen", "Destino"]
+
+    df_norm = df.copy()
+    for col in columns:
+        if col in df_norm.columns:
+            df_norm[col] = df_norm[col].apply(normalize_airport_code_to_icao)
+    return df_norm
+
 def get_drive_service():
     try:
         credentials_json = st.secrets["google_drive"]["credentials"]
@@ -44,8 +168,20 @@ def descargar_csv(file_name, folder_id):
     response = requests.get(url, headers={"Authorization": f"Bearer {service._http.credentials.token}"})
     if response.status_code != 200:
         return None
-    df = pd.read_csv(io.StringIO(response.text), header=None, names=COLUMNAS, encoding='UTF-8', sep=";")
-    df['datetime'] = pd.to_datetime(df['datetime'], format='%Y-%m-%d %H:%M:%S', errors='coerce')
+    df = pd.read_csv(io.StringIO(response.text), header=None, names=COLUMNAS, sep=";")
+
+    # Si la primera fila es la cabecera original del fichero, eliminarla
+    if not df.empty and str(df.iloc[0, 0]).strip().upper() == "FECHA":
+        df = df.iloc[1:]
+
+    # Parsear la columna datetime en formato europeo (dd/mm/aaaa hh:mm)
+    df['datetime'] = pd.to_datetime(df['datetime'], dayfirst=True, errors='coerce')
+
+    # Eliminar filas sin datetime válido
+    df = df.dropna(subset=['datetime'])
+
+    # Normalizar aeropuertos a ICAO
+    df = normalize_airport_columns_to_icao(df)
     return df
 
 def read_new_file(new_file):
@@ -58,7 +194,10 @@ def read_new_file(new_file):
     df_nuevo['datetime_simu'] = pd.to_datetime(df_nuevo['Fecha simu'], format='%d/%m/%y', errors='coerce')
     df_nuevo['datetime_simu'] += pd.to_timedelta(df_nuevo.groupby('Fecha simu').cumcount(), unit='m')
     df_nuevo['datetime'] = df_nuevo['datetime'].combine_first(df_nuevo['datetime_simu'])
-    return df_nuevo.drop(columns=['datetime_simu'])
+    df_nuevo = df_nuevo.drop(columns=['datetime_simu'])
+    # Normalizar aeropuertos a ICAO
+    df_nuevo = normalize_airport_columns_to_icao(df_nuevo)
+    return df_nuevo
 
 def descargar_y_actualizar_csv(original_file, folder_id, new_file):
     df_original = descargar_csv(original_file, folder_id)
@@ -68,6 +207,8 @@ def descargar_y_actualizar_csv(original_file, folder_id, new_file):
     min_datetime_nuevo = df_nuevo['datetime'].min()
     df_original_filtered = df_original[df_original['datetime'] < min_datetime_nuevo]
     df_actualizado = pd.concat([df_original_filtered, df_nuevo], ignore_index=True)
+    # Normalizar aeropuertos a ICAO en el DataFrame combinado
+    df_actualizado = normalize_airport_columns_to_icao(df_actualizado)
     return df_actualizado.drop_duplicates(subset=['datetime'], keep='last')
 
 def update_file_in_drive_by_name(file_name, folder_id, file_path):
@@ -100,13 +241,18 @@ def rellenar_y_combinar_pdfs(entry_file, exit_file, data):
     # Descargar el PDF desde Google Drive
     folder_id = '1B8gnCmbBaGMBT77ba4ntjpZj_NkJcvuI'  # Usamos el mismo folder_id que en app.py
     input_pdf_path = descargar_pdf_template(entry_file, folder_id)
-    
+
     if not os.path.exists(input_pdf_path):
         st.error(f"PDF template no encontrado después de descargarlo: {input_pdf_path}")
         raise FileNotFoundError(f"No such file: {input_pdf_path}")
-    
-    df = data
-    
+
+    df = data.copy()
+
+    # Si no hay datos, no podemos generar el PDF
+    if df.empty:
+        st.error("No hay datos en el LogBook para generar el PDF.")
+        raise ValueError("DataFrame vacío en rellenar_y_combinar_pdfs")
+
     # Drop first row if it contains the str "Fecha"
     if df.iloc[0, 0] == "Fecha":
         df = df.iloc[1:]
@@ -196,8 +342,19 @@ def rellenar_y_combinar_pdfs(entry_file, exit_file, data):
             for col in sum_columns:
                 if col in df.columns:
                     if col in numeric_columns:
-                        df_totals[col] = sum(int(df[col].iloc[i]) if df[col].iloc[i] else 0 for i in range(len(df)))
+                        # Sumar aterrizajes tratando NaN o vacíos como 0
+                        total = 0
+                        for i in range(len(df)):
+                            value = df[col].iloc[i]
+                            if pd.isna(value) or value == "":
+                                continue
+                            try:
+                                total += int(value)
+                            except (ValueError, TypeError):
+                                continue
+                        df_totals[col] = total
                     else:
+                        # Columnas de tiempo: usar conversión segura a minutos
                         df_totals[col] = sum(time_to_minutes(df[col].iloc[i]) for i in range(len(df)))
             
             start_page = df_idx * total_pages_per_df
@@ -356,37 +513,38 @@ def calculate_statistics(df):
     """Calcula estadísticas basadas en el DataFrame preprocesado."""
     df_clean = preprocess_data(df)
     
-    # Total de horas de vuelo (excluye simulador)
-    total_flight_time = df_clean["Tiempo total de vuelo"].sum() / 60
-    
-    # Total de horas de simulador (separado)
-    total_sim_time = df_clean["Total de sesión"].sum() / 60
-    
-    # Total de landings
-    total_landings = df_clean["Landings Día"].sum() + df_clean["Landings Noche"].sum()
-    
-    # Horas por tipo de avión (incluye simuladores bajo su 'Tipo')
-    hours_by_aircraft = (df_clean.groupby("Fabricante")["Tiempo total de vuelo"]
+    # Separar vuelos reales y sesiones de simulador
+    if "Fecha" in df_clean.columns:
+        flights_df = df_clean[df_clean["Fecha"] != "--"].copy()
+        sim_df = df_clean[df_clean["Fecha"] == "--"].copy()
+    else:
+        flights_df = df_clean.copy()
+        sim_df = df_clean.iloc[0:0].copy()
+
+    # Total de horas de vuelo (solo vuelos, excluye simulador)
+    total_flight_time = flights_df["Tiempo total de vuelo"].sum() / 60
+
+    # Total de horas de simulador (solo filas marcadas como simulador)
+    total_sim_time = sim_df["Total de sesión"].sum() / 60
+
+    # Total de landings (solo vuelos)
+    total_landings = flights_df["Landings Día"].sum() + flights_df["Landings Noche"].sum()
+
+    # Horas por tipo de avión (solo vuelos reales, por "Fabricante")
+    hours_by_aircraft = (flights_df.groupby("Fabricante")["Tiempo total de vuelo"]
                         .sum() / 60).to_dict()
-    # Depuración: Verificar horas de B738
-    b738_hours = df_clean[df_clean["Fabricante"] == "B738"]["Tiempo total de vuelo"].sum() / 60
-    print(f"Debug: Horas calculadas para B738: {b738_hours:.2f} horas")
-    # Agregar horas de simulador bajo 'Tipo'
-    sim_hours = (df_clean.groupby("Tipo")["Total de sesión"]
-                .sum() / 60).to_dict()
-    hours_by_aircraft.update(sim_hours)
-    
-    # Horas como piloto al mando
-    total_pic_time = df_clean["Piloto al mando"].sum() / 60
-    
-    # Horas nocturnas
-    total_night_time = df_clean["Noche"].sum() / 60
-    
-    # Horas IFR
-    total_ifr_time = df_clean["IFR"].sum() / 60
-    
-    # Vuelos por mes/año
-    flights_by_month = (df_clean.groupby(df_clean["datetime"].dt.to_period("M"))
+
+    # Horas como piloto al mando (solo vuelos)
+    total_pic_time = flights_df["Piloto al mando"].sum() / 60
+
+    # Horas nocturnas (solo vuelos)
+    total_night_time = flights_df["Noche"].sum() / 60
+
+    # Horas IFR (solo vuelos)
+    total_ifr_time = flights_df["IFR"].sum() / 60
+
+    # Vuelos por mes/año (solo vuelos)
+    flights_by_month = (flights_df.groupby(flights_df["datetime"].dt.to_period("M"))
                        .size().to_dict())
     
     return {
@@ -409,6 +567,10 @@ def filter_future_dates(df):
 # Devuelve dos Series ordenadas descendentemente: despegues (por Origen) y aterrizajes (por Destino)
 def airport_operations(df):
     df_ops = df.copy()
+
+    # Excluir sesiones de simulador (Fecha == "--") del conjunto de vuelos
+    if "Fecha" in df_ops.columns:
+        df_ops = df_ops[df_ops["Fecha"] != "--"]
     # Normalizar
     for col in ['Origen', 'Destino']:
         if col in df_ops.columns:
@@ -427,3 +589,115 @@ def airport_operations(df):
                       .sort_values(ascending=False)
                       .rename('Aterrizajes'))
     return takeoffs, landings
+
+
+def build_airport_map_df(df):
+    """Construye un DataFrame con coordenadas y número de operaciones por aeropuerto.
+
+    Usa columnas Origen/Destino (ya normalizadas a ICAO), excluye simulador (Fecha == "--"),
+    y convierte ICAO -> IATA para buscar lat/lon en AIRPORT_COORDS.
+    """
+    df_ops = df.copy()
+    if "Fecha" in df_ops.columns:
+        df_ops = df_ops[df_ops["Fecha"] != "--"]
+
+    # Contar operaciones por aeropuerto (origen + destino)
+    counts = {}
+    for col in ["Origen", "Destino"]:
+        if col not in df_ops.columns:
+            continue
+        series = (
+            df_ops[col]
+            .astype(str)
+            .str.strip()
+            .str.upper()
+            .replace({"": pd.NA, "NAN": pd.NA})
+            .dropna()
+        )
+        for code, n in series.value_counts().items():
+            counts[code] = counts.get(code, 0) + int(n)
+
+    rows = []
+    for icao, n_ops in counts.items():
+        # Intentar pasar de ICAO a IATA
+        iata = ICAO_TO_IATA.get(icao)
+        if not iata:
+            # Si ya parece IATA (3 letras), usarlo directamente
+            if len(icao) == 3 and icao.isalpha():
+                iata = icao
+            else:
+                continue
+        coords = AIRPORT_COORDS.get(iata)
+        if not coords:
+            continue
+        lat, lon = coords
+        rows.append({
+            "Aeropuerto": icao,
+            "IATA": iata,
+            "Lat": lat,
+            "Lon": lon,
+            "Operaciones": n_ops,
+        })
+
+    if not rows:
+        return pd.DataFrame(columns=["Aeropuerto", "IATA", "Lat", "Lon", "Operaciones"])
+
+    return pd.DataFrame(rows)
+
+
+def build_routes_map_df(df):
+    """Construye un DataFrame para representar rutas (líneas) entre aeropuertos.
+
+    Cada ruta se identifica por par Origen/Destino (ICAO), se excluyen sesiones de
+    simulador (Fecha == "--") y sólo se usan aeropuertos con coordenadas conocidas
+    en `AIRPORT_COORDS`.
+    """
+    df_ops = df.copy()
+    if "Fecha" in df_ops.columns:
+        df_ops = df_ops[df_ops["Fecha"] != "--"]
+
+    routes_counts: dict[tuple[str, str], int] = {}
+
+    for _, row in df_ops.iterrows():
+        o = str(row.get("Origen", "")).strip().upper()
+        d = str(row.get("Destino", "")).strip().upper()
+        if not o or not d or o in ("--", "NAN") or d in ("--", "NAN"):
+            continue
+        key = (o, d)
+        routes_counts[key] = routes_counts.get(key, 0) + 1
+
+    rows = []
+    for (o_icao, d_icao), n in routes_counts.items():
+        o_iata = ICAO_TO_IATA.get(o_icao)
+        d_iata = ICAO_TO_IATA.get(d_icao)
+        if not o_iata or not d_iata:
+            continue
+
+        o_coords = AIRPORT_COORDS.get(o_iata)
+        d_coords = AIRPORT_COORDS.get(d_iata)
+        if not o_coords or not d_coords:
+            continue
+
+        o_lat, o_lon = o_coords
+        d_lat, d_lon = d_coords
+        route_id = f"{o_icao}-{d_icao}"
+
+        rows.append({
+            "route": route_id,
+            "Lat": o_lat,
+            "Lon": o_lon,
+            "Flights": n,
+            "Punto": "Origen",
+        })
+        rows.append({
+            "route": route_id,
+            "Lat": d_lat,
+            "Lon": d_lon,
+            "Flights": n,
+            "Punto": "Destino",
+        })
+
+    if not rows:
+        return pd.DataFrame(columns=["route", "Lat", "Lon", "Flights", "Punto"])
+
+    return pd.DataFrame(rows)
