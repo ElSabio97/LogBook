@@ -1,9 +1,0 @@
-streamlit
-google-api-python-client
-lxml
-pandas
-requests
-pdfrw
-pymupdf
-matplotlib  # Puedes dejarlo si lo usas en otro lugar, pero ya no es necesario para estas gráficas
-plotly  # Añadido para las gráficas interactivas
