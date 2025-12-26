@@ -11,7 +11,8 @@ from logbook_pdf import DEFAULT_LAYOUT, generate_logbook_pdf_bytes
 
 @st.cache_resource
 def get_db_client():
-    credentials = service_account.Credentials.from_service_account_file("serviceAccountKey.json")
+    """Obtiene el cliente de Firestore usando las credenciales almacenadas en st.secrets"""
+    credentials = service_account.Credentials.from_service_account_info(st.secrets["firebase"])
     return firestore.Client(credentials=credentials, project=credentials.project_id)
 
 @st.cache_data(show_spinner=False)
@@ -496,3 +497,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
