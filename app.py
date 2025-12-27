@@ -12,34 +12,60 @@ from logbook_pdf import DEFAULT_LAYOUT, generate_logbook_pdf_bytes
 
 @st.cache_resource
 def get_db_client():
-    # Preferir Streamlit secrets (Cloud) y dejar fallback a fichero local.
-    # En secrets, suele venir como un dict bajo la clave "gcp_service_account".
-    if "gcp_service_account" in st.secrets:
-        info = dict(st.secrets["gcp_service_account"])
-        credentials = service_account.Credentials.from_service_account_info(info)
-        project_id = info.get("project_id") or credentials.project_id
-        return firestore.Client(credentials=credentials, project=project_id)
+    def _creds_and_project_from_sa_info(sa_info: dict):
+        scopes = ["https://www.googleapis.com/auth/datastore"]
+        creds = service_account.Credentials.from_service_account_info(dict(sa_info), scopes=scopes)
+        project_id = (
+            st.secrets.get("gcp_project")
+            or st.secrets.get("gcp_project_id")
+            or sa_info.get("project_id")
+            or st.secrets.get("project_id")
+            or getattr(creds, "project_id", None)
+        )
+        if not project_id:
+            raise RuntimeError("No se pudo determinar project_id para Firestore.")
+        return creds, str(project_id)
 
-    # Alternativa: secrets con secciones tipo:
+    # Caso 1 (recomendado): dict en secrets
+    if "gcp_service_account" in st.secrets:
+        sa_info = dict(st.secrets["gcp_service_account"])
+        creds, project_id = _creds_and_project_from_sa_info(sa_info)
+        return firestore.Client(credentials=creds, project=project_id)
+
+    # Caso 2 (tu configuración): JSON como string dentro de una sección
     # [google_drive]
     # credentials = "{...json service account...}"
     if "google_drive" in st.secrets and "credentials" in st.secrets["google_drive"]:
         raw = st.secrets["google_drive"]["credentials"]
         try:
-            info = json.loads(raw) if isinstance(raw, str) else dict(raw)
+            parsed = json.loads(raw) if isinstance(raw, str) else dict(raw)
+            # Si por accidente viene "doble-serializado" (JSON de un JSON), cargar otra vez.
+            sa_info = json.loads(parsed) if isinstance(parsed, str) else dict(parsed)
         except Exception as e:
-            raise RuntimeError(f"No se pudo parsear st.secrets['google_drive']['credentials'] como JSON: {e}")
+            raise RuntimeError(
+                "No se pudo parsear st.secrets['google_drive']['credentials'] como JSON de service account: "
+                f"{e}"
+            )
 
-        credentials = service_account.Credentials.from_service_account_info(info)
-        project_id = info.get("project_id") or credentials.project_id
-        return firestore.Client(credentials=credentials, project=project_id)
+        creds, project_id = _creds_and_project_from_sa_info(sa_info)
+        return firestore.Client(credentials=creds, project=project_id)
+
+    # Caso 3: claves planas en secrets (como tu otra app)
+    flat_keys_required = ("type", "project_id", "private_key", "client_email", "token_uri")
+    if all(k in st.secrets for k in flat_keys_required):
+        sa_info = {k: st.secrets[k] for k in st.secrets.keys() if isinstance(k, str)}
+        creds, project_id = _creds_and_project_from_sa_info(sa_info)
+        return firestore.Client(credentials=creds, project=project_id)
 
     if Path("serviceAccountKey.json").exists():
         credentials = service_account.Credentials.from_service_account_file("serviceAccountKey.json")
         return firestore.Client(credentials=credentials, project=credentials.project_id)
 
     raise RuntimeError(
-        "No se encontraron credenciales. Configura st.secrets['gcp_service_account'] "
+        "No se encontraron credenciales. Opciones: "
+        "1) st.secrets['gcp_service_account'] (dict), "
+        "2) st.secrets['google_drive']['credentials'] (JSON string), "
+        "3) secrets planos (type/project_id/private_key/client_email/token_uri), "
         "o añade serviceAccountKey.json en local."
     )
 
