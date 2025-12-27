@@ -2,71 +2,21 @@ import streamlit as st
 import pandas as pd
 import altair as alt
 import pydeck as pdk
-import json
 from google.cloud import firestore
 from google.oauth2 import service_account
-from datetime import datetime
 from pathlib import Path
 
 from logbook_pdf import DEFAULT_LAYOUT, generate_logbook_pdf_bytes
 
 def get_db_client():
-    def _creds_and_project_from_sa_info(sa_info: dict):
-        scopes = ["https://www.googleapis.com/auth/datastore"]
-        creds = service_account.Credentials.from_service_account_info(dict(sa_info), scopes=scopes)
-        project_id = (
-            st.secrets.get("gcp_project")
-            or st.secrets.get("gcp_project_id")
-            or sa_info.get("project_id")
-            or st.secrets.get("project_id")
-            or getattr(creds, "project_id", None)
-        )
-        if not project_id:
-            raise RuntimeError("No se pudo determinar project_id para Firestore.")
-        return creds, str(project_id)
+    sa_info = dict(st.secrets["gcp_service_account"])
+    project_id = st.secrets.get("gcp_project") or st.secrets.get("gcp_project_id") or sa_info.get("project_id")
+    if not project_id:
+        raise RuntimeError("Falta 'gcp_project' (o 'gcp_project_id') en st.secrets.")
 
-    # Caso 1 (recomendado): dict en secrets
-    if "gcp_service_account" in st.secrets:
-        sa_info = dict(st.secrets["gcp_service_account"])
-        creds, project_id = _creds_and_project_from_sa_info(sa_info)
-        return firestore.Client(credentials=creds, project=project_id)
-
-    # Caso 2 (tu configuración): JSON como string dentro de una sección
-    # [google_drive]
-    # credentials = "{...json service account...}"
-    if "google_drive" in st.secrets and "credentials" in st.secrets["google_drive"]:
-        raw = st.secrets["google_drive"]["credentials"]
-        try:
-            parsed = json.loads(raw) if isinstance(raw, str) else dict(raw)
-            # Si por accidente viene "doble-serializado" (JSON de un JSON), cargar otra vez.
-            sa_info = json.loads(parsed) if isinstance(parsed, str) else dict(parsed)
-        except Exception as e:
-            raise RuntimeError(
-                "No se pudo parsear st.secrets['google_drive']['credentials'] como JSON de service account: "
-                f"{e}"
-            )
-
-        creds, project_id = _creds_and_project_from_sa_info(sa_info)
-        return firestore.Client(credentials=creds, project=project_id)
-
-    # Caso 3: claves planas en secrets (como tu otra app)
-    flat_keys_required = ("type", "project_id", "private_key", "client_email", "token_uri")
-    if all(k in st.secrets for k in flat_keys_required):
-        sa_info = {k: st.secrets[k] for k in st.secrets.keys() if isinstance(k, str)}
-        creds, project_id = _creds_and_project_from_sa_info(sa_info)
-        return firestore.Client(credentials=creds, project=project_id)
-
-    if Path("serviceAccountKey.json").exists():
-        credentials = service_account.Credentials.from_service_account_file("serviceAccountKey.json")
-        return firestore.Client(credentials=credentials, project=credentials.project_id)
-
-    raise RuntimeError(
-        "No se encontraron credenciales. Opciones: "
-        "1) st.secrets['gcp_service_account'] (dict), "
-        "2) st.secrets['google_drive']['credentials'] (JSON string), "
-        "3) secrets planos (type/project_id/private_key/client_email/token_uri), "
-        "o añade serviceAccountKey.json en local."
-    )
+    scopes = ["https://www.googleapis.com/auth/datastore"]
+    creds = service_account.Credentials.from_service_account_info(sa_info, scopes=scopes)
+    return firestore.Client(credentials=creds, project=str(project_id))
 
 @st.cache_data(show_spinner=False)
 def load_data_from_firestore():
@@ -179,32 +129,7 @@ def main():
         return f"{h:02d}:{m:02d}"
 
     with st.spinner("Cargando datos desde Firestore..."):
-        try:
-            df = load_data_from_firestore()
-        except Exception as e:
-            msg = str(e)
-            if "SERVICE_DISABLED" in msg or "Cloud Firestore API has not been used" in msg:
-                project_hint = None
-                try:
-                    if "gcp_service_account" in st.secrets:
-                        project_hint = st.secrets["gcp_service_account"].get("project_id")
-                    elif "google_drive" in st.secrets and "credentials" in st.secrets["google_drive"]:
-                        raw = st.secrets["google_drive"]["credentials"]
-                        parsed = json.loads(raw) if isinstance(raw, str) else dict(raw)
-                        sa_info = json.loads(parsed) if isinstance(parsed, str) else dict(parsed)
-                        project_hint = sa_info.get("project_id")
-                except Exception:
-                    project_hint = None
-
-                st.error(
-                    "Firestore no responde porque la API está deshabilitada para el proyecto. "
-                    + (f"Proyecto detectado: {project_hint}. " if project_hint else "")
-                    + "En Google Cloud Console habilita 'Cloud Firestore API' para ese proyecto y reinicia la app. "
-                    "Si ya lo habilitaste, espera unos minutos (propagación) y vuelve a intentar."
-                )
-            else:
-                st.error(f"Error cargando Firestore: {e}")
-            return
+        df = load_data_from_firestore()
 
     if df.empty:
         st.warning("No se han encontrado datos en la colección 'logbook'.")
@@ -568,12 +493,7 @@ def main():
         mime="application/pdf",
     )
 
-    if downloaded:
-        try:
-            with open("Logbook.pdf", "wb") as f:
-                f.write(pdf_bytes)
-        except Exception as e:
-            st.warning(f"Se descargó el PDF, pero no se pudo guardar en disco: {e}")
+    _ = downloaded
 
 
 if __name__ == "__main__":
