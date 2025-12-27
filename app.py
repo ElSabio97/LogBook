@@ -10,7 +10,6 @@ from pathlib import Path
 
 from logbook_pdf import DEFAULT_LAYOUT, generate_logbook_pdf_bytes
 
-@st.cache_resource
 def get_db_client():
     def _creds_and_project_from_sa_info(sa_info: dict):
         scopes = ["https://www.googleapis.com/auth/datastore"]
