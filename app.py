@@ -180,7 +180,32 @@ def main():
         return f"{h:02d}:{m:02d}"
 
     with st.spinner("Cargando datos desde Firestore..."):
-        df = load_data_from_firestore()
+        try:
+            df = load_data_from_firestore()
+        except Exception as e:
+            msg = str(e)
+            if "SERVICE_DISABLED" in msg or "Cloud Firestore API has not been used" in msg:
+                project_hint = None
+                try:
+                    if "gcp_service_account" in st.secrets:
+                        project_hint = st.secrets["gcp_service_account"].get("project_id")
+                    elif "google_drive" in st.secrets and "credentials" in st.secrets["google_drive"]:
+                        raw = st.secrets["google_drive"]["credentials"]
+                        parsed = json.loads(raw) if isinstance(raw, str) else dict(raw)
+                        sa_info = json.loads(parsed) if isinstance(parsed, str) else dict(parsed)
+                        project_hint = sa_info.get("project_id")
+                except Exception:
+                    project_hint = None
+
+                st.error(
+                    "Firestore no responde porque la API está deshabilitada para el proyecto. "
+                    + (f"Proyecto detectado: {project_hint}. " if project_hint else "")
+                    + "En Google Cloud Console habilita 'Cloud Firestore API' para ese proyecto y reinicia la app. "
+                    "Si ya lo habilitaste, espera unos minutos (propagación) y vuelve a intentar."
+                )
+            else:
+                st.error(f"Error cargando Firestore: {e}")
+            return
 
     if df.empty:
         st.warning("No se han encontrado datos en la colección 'logbook'.")
