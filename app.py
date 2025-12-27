@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import altair as alt
 import pydeck as pdk
+import json
 from google.cloud import firestore
 from google.oauth2 import service_account
 from datetime import datetime
@@ -11,9 +12,36 @@ from logbook_pdf import DEFAULT_LAYOUT, generate_logbook_pdf_bytes
 
 @st.cache_resource
 def get_db_client():
-    """Obtiene el cliente de Firestore usando las credenciales almacenadas en st.secrets"""
-    credentials = service_account.Credentials.from_service_account_info(st.secrets["firebase"])
-    return firestore.Client(credentials=credentials, project=credentials.project_id)
+    # Preferir Streamlit secrets (Cloud) y dejar fallback a fichero local.
+    # En secrets, suele venir como un dict bajo la clave "gcp_service_account".
+    if "gcp_service_account" in st.secrets:
+        info = dict(st.secrets["gcp_service_account"])
+        credentials = service_account.Credentials.from_service_account_info(info)
+        project_id = info.get("project_id") or credentials.project_id
+        return firestore.Client(credentials=credentials, project=project_id)
+
+    # Alternativa: secrets con secciones tipo:
+    # [google_drive]
+    # credentials = "{...json service account...}"
+    if "google_drive" in st.secrets and "credentials" in st.secrets["google_drive"]:
+        raw = st.secrets["google_drive"]["credentials"]
+        try:
+            info = json.loads(raw) if isinstance(raw, str) else dict(raw)
+        except Exception as e:
+            raise RuntimeError(f"No se pudo parsear st.secrets['google_drive']['credentials'] como JSON: {e}")
+
+        credentials = service_account.Credentials.from_service_account_info(info)
+        project_id = info.get("project_id") or credentials.project_id
+        return firestore.Client(credentials=credentials, project=project_id)
+
+    if Path("serviceAccountKey.json").exists():
+        credentials = service_account.Credentials.from_service_account_file("serviceAccountKey.json")
+        return firestore.Client(credentials=credentials, project=credentials.project_id)
+
+    raise RuntimeError(
+        "No se encontraron credenciales. Configura st.secrets['gcp_service_account'] "
+        "o añade serviceAccountKey.json en local."
+    )
 
 @st.cache_data(show_spinner=False)
 def load_data_from_firestore():
@@ -491,10 +519,12 @@ def main():
     )
 
     if downloaded:
-        with open("Logbook.pdf", "wb") as f:
-            f.write(pdf_bytes)
+        try:
+            with open("Logbook.pdf", "wb") as f:
+                f.write(pdf_bytes)
+        except Exception as e:
+            st.warning(f"Se descargó el PDF, pero no se pudo guardar en disco: {e}")
 
 
 if __name__ == "__main__":
     main()
-
